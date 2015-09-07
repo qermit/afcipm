@@ -158,6 +158,10 @@
  */
 #define IPMBL_TABLE_SIZE                 27
 
+struct xI2C_Config;
+typedef void (*MuxHandler_t)(I2C_ID_T i2c_id, struct xI2C_Config* i2c_config, int8_t value);
+
+
 /*! @brief GA pins definition */
 typedef enum {
     GROUNDED = 0,
@@ -187,9 +191,11 @@ typedef enum {
     i2c_err_SLA_W_SENT_NACK,                /*!< SLA+R address transmitted, but no response has been received.
                                              *  Slave is either busy or unreachable.
                                              *  @see #I2C_STAT_SLA_W_SENT_NACK  */
-    i2c_err_DATA_SENT_NACK                  /*!< DATA byte has been transmitted, but NACK has returned.
+    i2c_err_DATA_SENT_NACK,                 /*!< DATA byte has been transmitted, but NACK has returned.
                                              *  Slave is either busy or unreachable.
                                              *  @see #I2C_STAT_DATA_SENT_NACK  */
+	i2c_err_UNKONWN_IFACE,                  /*!< Unknown interface id (I2C_ID_T i2c_id) */
+
 } i2c_err;
 
 /*! @brief I2C transaction parameter structure */
@@ -235,6 +241,10 @@ typedef struct xI2C_Config {
     uint8_t rx_cnt;                /*!< Received bytes counter */
     uint8_t tx_cnt;                /*!< Transmitted bytes counter */
     xI2C_msg msg;                  /*!< Message body (tx and rx buffers) */
+    int8_t mux_state;              /*!< Mux state, hold information
+                                    * -1 unknown state */
+    MuxHandler_t mux_handler;      /*!< pointer to mux state changer function
+                                    * NULL: no mux registered */
 } xI2C_Config;
 
 /*! Global I2C Configuration struct array (1 item for each interface) */
@@ -379,5 +389,39 @@ uint8_t xI2CSlaveTransfer ( I2C_ID_T i2c_id, uint8_t * rx_data, uint32_t timeout
  * and it takes some time to go through all this function.
  */
 uint8_t get_ipmb_addr( void );
+
+
+/*! @brief Changes I2C mux state if registered
+ *
+ * @param i2c_id: Interface ID ( I2C0, I2C1, I2C2 ).
+ * @param value: new mux value.
+ *
+ * @param xBlockTime The time in ticks to wait for the semaphore to become
+ * available.  The macro portTICK_PERIOD_MS can be used to convert this to a
+ * real time.  A block time of zero can be used to poll the semaphore.  A block
+ * time of portMAX_DELAY can be used to block indefinitely (provided
+ * INCLUDE_vTaskSuspend is set to 1 in FreeRTOSConfig.h).
+ *
+ * @return I2C Driver error
+ *
+ */
+i2c_err xI2CMuxSetState(I2C_ID_T i2c_id, int8_t value, TickType_t xBlockTime);
+
+/*! @brief Registers i2c mux function handler
+ *
+ * @param i2c_id: Interface ID ( I2C0, I2C1, I2C2 ).
+ * @param handler: pointer to handler function.
+ *
+ * @param xBlockTime The time in ticks to wait for the semaphore to become
+ * available.  The macro portTICK_PERIOD_MS can be used to convert this to a
+ * real time.  A block time of zero can be used to poll the semaphore.  A block
+ * time of portMAX_DELAY can be used to block indefinitely (provided
+ * INCLUDE_vTaskSuspend is set to 1 in FreeRTOSConfig.h).
+ *
+ * @return I2C Driver error
+ *
+ */
+i2c_err xI2CMuxRegister(I2C_ID_T i2c_id, MuxHandler_t handler, TickType_t xBlockTime);
+
 
 #endif /*I2C_H_*/

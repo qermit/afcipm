@@ -23,10 +23,29 @@
 #define BOARD_DEFS_H_
 
 //#ifndef BOARD
-#define BOARD           MBED
+#define BOARD_MBED   0
+#define BOARD_AFC    1
+#define BOARD_AFCK   2
+
+#ifdef BOARD
+#undef BOARD
+#endif
+
+#define BOARD_VERSION_MBED      1
+
+#define BOARD_VERSION_AFC_V1    1
+#define BOARD_VERSION_AFC_V2    2
+#define BOARD_VERSION_AFC_V3    3
+#define BOARD_VERSION_AFC_V3_1  4
+
+#define BOARD           BOARD_MBED
+#define BOARD_VERSION   BOARD_VERSION_AFC_V3
+
+
 //#endif
 
-#if (BOARD == AFC_V3)
+#if (BOARD == BOARD_AFC)
+#if (BOARD_VERSION == BOARD_VERSION_AFC_V3)
 
 /* I2C Pins definitions */
 
@@ -62,7 +81,8 @@
 #define ledRED_PORT     1
 #define ledRED_PIN      25
 
-#elif (BOARD == MBED)
+#endif
+#elif (BOARD == BOARD_MBED)
 
 /* I2C Pins definitions */
 
@@ -95,6 +115,8 @@
 #define ledRED_PORT     1
 #define ledRED_PIN      21
 
+#else
+#error "Unknown board"
 #endif
 
 #endif

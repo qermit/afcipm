@@ -67,6 +67,8 @@ xI2C_Config i2c_cfg[] = {
         .slave_task_id = NULL,
         .rx_cnt = 0,
         .tx_cnt = 0,
+		.mux_handler = NULL,
+		.mux_state = -1,
     },
     {
         .reg = LPC_I2C1,
@@ -83,6 +85,8 @@ xI2C_Config i2c_cfg[] = {
         .slave_task_id = NULL,
         .rx_cnt = 0,
         .tx_cnt = 0,
+		.mux_handler = NULL,
+		.mux_state = -1,
     },
     {
         .reg = LPC_I2C2,
@@ -99,8 +103,12 @@ xI2C_Config i2c_cfg[] = {
         .slave_task_id = NULL,
         .rx_cnt = 0,
         .tx_cnt = 0,
+		.mux_handler = NULL,
+		.mux_state = -1,
     }
 };
+
+#define I2C_IFACE_COUNT (sizeof(i2c_cfg)/sizeof(xI2C_Config))
 
 /*! @brief Array of mutexes to access #i2c_cfg global struct
  *
@@ -108,7 +116,7 @@ xI2C_Config i2c_cfg[] = {
  * before setting/reading any field from #i2c_cfg struct,
  * since it's used by multiple tasks simultaneously
  */
-static SemaphoreHandle_t I2C_mutex[3];
+static SemaphoreHandle_t I2C_mutex[I2C_IFACE_COUNT];
 
 void vI2C_ISR( uint8_t i2c_id );
 
@@ -341,6 +349,7 @@ void vI2CInit( I2C_ID_T i2c_id, I2C_Mode mode )
 
 } /* End of vI2C_Init */
 
+
 i2c_err xI2CWrite( I2C_ID_T i2c_id, uint8_t addr, uint8_t * tx_data, uint8_t tx_len )
 {
     /* Checks if the message will fit in our buffer */
@@ -349,7 +358,9 @@ i2c_err xI2CWrite( I2C_ID_T i2c_id, uint8_t addr, uint8_t * tx_data, uint8_t tx_
     }
 
     /* Take the mutex to access the shared memory */
-    if (xSemaphoreTake( I2C_mutex[i2c_id], 10 ) == pdTRUE) {
+    if (xSemaphoreTake( I2C_mutex[i2c_id], 10 ) == pdFALSE) {
+    	return i2c_err_FAILURE;
+    }
 
     /* Populate the i2c config struct */
     i2c_cfg[i2c_id].msg.i2c_id = i2c_id;
@@ -359,10 +370,6 @@ i2c_err xI2CWrite( I2C_ID_T i2c_id, uint8_t addr, uint8_t * tx_data, uint8_t tx_
     i2c_cfg[i2c_id].msg.rx_len = 0;
     i2c_cfg[i2c_id].master_task_id = xTaskGetCurrentTaskHandle();
 
-    xSemaphoreGive( I2C_mutex[i2c_id] );
-    } else {
-    	return i2c_err_FAILURE;
-    }
 
     /* Trigger the i2c interruption */
     /* @bug Is it safe to set the flag right now? Won't it stop another ongoing message that is being received for example? */
@@ -371,25 +378,26 @@ i2c_err xI2CWrite( I2C_ID_T i2c_id, uint8_t addr, uint8_t * tx_data, uint8_t tx_
 
     if ( ulTaskNotifyTake( pdTRUE, portMAX_DELAY ) == pdTRUE ){
         /* Include the error in i2c_cfg global structure */
+        xSemaphoreGive( I2C_mutex[i2c_id] );
+
         return i2c_cfg[i2c_id].msg.error;
     }
 
-    /* Should not get here, so return failure */
-    return i2c_err_FAILURE;
+    xSemaphoreGive( I2C_mutex[i2c_id] );
 }
 
 i2c_err xI2CRead( I2C_ID_T i2c_id, uint8_t addr, uint8_t * rx_data, uint8_t rx_len )
 {
     /* Take the mutex to access shared memory */
-    xSemaphoreTake( I2C_mutex[i2c_id], portMAX_DELAY );
+	if (xSemaphoreTake( I2C_mutex[i2c_id], portMAX_DELAY ) == pdFALSE ) {
+		return i2c_err_FAILURE;
+	}
 
     i2c_cfg[i2c_id].msg.i2c_id = i2c_id;
     i2c_cfg[i2c_id].msg.addr = addr;
     i2c_cfg[i2c_id].msg.tx_len = 0;
     i2c_cfg[i2c_id].msg.rx_len = rx_len;
     i2c_cfg[i2c_id].master_task_id = xTaskGetCurrentTaskHandle();
-
-    xSemaphoreGive( I2C_mutex[i2c_id] );
 
     /* Trigger the i2c interruption */
     /* Is it safe to set the flag right now? Won't it stop another ongoing message that is being received for example? */
@@ -401,12 +409,14 @@ i2c_err xI2CRead( I2C_ID_T i2c_id, uint8_t addr, uint8_t * rx_data, uint8_t rx_l
         configASSERT(rx_data);
         configASSERT(i2c_cfg[i2c_id].msg.rx_data);
 
-        xSemaphoreTake( I2C_mutex[i2c_id], portMAX_DELAY );
         /* Copy the received message to the given pointer */
         memcpy (rx_data, i2c_cfg[i2c_id].msg.rx_data, i2c_cfg[i2c_id].msg.rx_len );
-        xSemaphoreGive( I2C_mutex[i2c_id] );
     }
+
+    xSemaphoreGive( I2C_mutex[i2c_id] );
+
     return i2c_cfg[i2c_id].msg.error;
+
 }
 
 uint8_t xI2CSlaveTransfer ( I2C_ID_T i2c_id, uint8_t * rx_data, uint32_t timeout )
@@ -552,4 +562,42 @@ uint8_t get_ipmb_addr( void )
     return IPMBL_TABLE[index];
 }
 #undef GPIO_GA_DELAY
+
+i2c_err xI2CMuxSetState(I2C_ID_T i2c_id, int8_t value, TickType_t xBlockTime) {
+	if (i2c_id >= I2C_IFACE_COUNT) return i2c_err_UNKONWN_IFACE;
+	BaseType_t semaphore_success = pdFALSE;
+
+	xI2C_Config *p_i2c_config = &i2c_cfg[i2c_id];
+
+	if (xBlockTime != 0) {
+		semaphore_success = xSemaphoreTake(I2C_mutex[i2c_id], portMAX_DELAY);
+		if (semaphore_success == pdFALSE) return i2c_err_FAILURE;
+	}
+
+	if (p_i2c_config->mux_handler != NULL && value != p_i2c_config->mux_state) {
+		p_i2c_config->mux_handler(i2c_id, p_i2c_config, value);
+	}
+
+    if (xBlockTime != 0) xSemaphoreGive(I2C_mutex[i2c_id]);
+    return i2c_err_SUCCESS;
+}
+
+
+i2c_err xI2CMuxRegister(I2C_ID_T i2c_id, MuxHandler_t handler, TickType_t xBlockTime) {
+	if (i2c_id >= I2C_IFACE_COUNT) return i2c_err_UNKONWN_IFACE;
+	BaseType_t semaphore_success = pdFALSE;
+
+	xI2C_Config *p_i2c_config = &i2c_cfg[i2c_id];
+
+	if (xBlockTime != 0) {
+		semaphore_success = xSemaphoreTake(I2C_mutex[i2c_id], portMAX_DELAY);
+		if (semaphore_success == pdFALSE) return i2c_err_FAILURE;
+	}
+
+	p_i2c_config->mux_handler = handler;
+	p_i2c_config->mux_state = -1;
+
+    if (xBlockTime != 0) xSemaphoreGive(I2C_mutex[i2c_id]);
+    return i2c_err_SUCCESS;
+}
 
